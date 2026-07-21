@@ -1,10 +1,10 @@
 /**
  * Connection Manager — route Postgres queries by query type (v0.30.1, Fix 1).
  *
- * Three pools, one decision: read() goes to the pooler (port 6543, fast,
- * many connections); ddl() and bulk() go to a direct connection (port 5432,
- * 30min statement_timeout, capped at 3 conns) so DDL doesn't time out on
- * the Supabase pooler's 2-min statement_timeout.
+ * Three pools, one decision: read() goes to the transaction pooler (port 6543,
+ * fast, many connections); ddl() and bulk() go to a session-mode Supavisor
+ * connection (port 5432, 30min statement_timeout, capped at 3 conns) so DDL
+ * doesn't time out on the transaction pooler's 2-min statement_timeout.
  *
  * The connection-manager is the URL-routing layer. It layers on top of
  * postgres.js's existing pool primitives + PostgresEngine.withReservedConnection.
@@ -117,15 +117,15 @@ export function isSupabasePoolerUrl(url: string): boolean {
 }
 
 /**
- * Derive a direct (non-pooler) URL from a Supabase pooler URL. Two known shapes:
+ * Derive a DDL-capable session-mode URL from a Supabase pooler URL. Supabase's
+ * session pooler preserves connection-local settings while avoiding the direct
+ * db.* hostname, which is IPv6-only for some projects and unreachable from
+ * IPv4-only WSL. An explicit GBRAIN_DIRECT_DATABASE_URL remains available for
+ * operators who intentionally want the raw database endpoint.
  *
  *   Pooler hostname: aws-N-region.pooler.supabase.com on port 6543
- *      → swap to db.<project-ref>.supabase.co on port 5432
- *      (project-ref encoded in the user component as postgres.<ref>)
+ *      → same host on port 5432 (session mode)
  *   Direct hostname: db.<ref>.supabase.co already on port 5432 → returned as-is
- *
- * For the modern shape, we try to extract project-ref from the user component.
- * If we cannot, we fall back to swapping port-only and the caller may warn.
  *
  * Returns null when the URL isn't a recognized Supabase pooler.
  */
@@ -136,32 +136,17 @@ export function deriveDirectUrl(url: string): string | null {
     const hostname = parsed.hostname;
     const isPoolerHost = SUPABASE_POOLER_HOSTNAME_PATTERNS.some(re => re.test(hostname));
     if (port !== '6543' && !isPoolerHost) return null;
-    // User part on Supabase pooler is typically `postgres.<project-ref>`.
-    // Extract <project-ref> for the direct hostname.
-    const user = parsed.username || '';
-    const decodedUser = decodeURIComponent(user);
-    const refMatch = decodedUser.match(/^postgres\.([a-z0-9]+)$/i);
-    let directHost = hostname;
-    let directUser = parsed.username;
-    if (refMatch && refMatch[1] && isPoolerHost) {
-      directHost = `db.${refMatch[1]}.supabase.co`;
-      // Supabase direct connections use bare `postgres`; the `postgres.<ref>`
-      // form is pooler-only (Supavisor uses the suffix for tenant routing).
-      // Without this strip, direct auth fails with `password authentication
-      // failed for user "postgres.<ref>"` even though the password is correct.
-      directUser = 'postgres';
-    }
-    // Compose direct URL by swapping host + port. Preserve auth, db, query.
-    parsed.hostname = directHost;
+    // Keep the pooler hostname and switch to Supavisor session mode. Preserve
+    // the `postgres.<ref>` tenant suffix required by pooler authentication.
     parsed.port = '5432';
-    // Reconstruct with the original scheme.
+    // Reconstruct with the original scheme, auth, database, and query string.
     const scheme = url.match(/^postgres(?:ql)?:\/\//i)?.[0] ?? 'postgres://';
-    const auth = directUser
-      ? `${directUser}${parsed.password ? `:${parsed.password}` : ''}@`
+    const auth = parsed.username
+      ? `${parsed.username}${parsed.password ? `:${parsed.password}` : ''}@`
       : '';
     const search = parsed.search ?? '';
     const path = parsed.pathname ?? '';
-    return `${scheme}${auth}${directHost}:5432${path}${search}`;
+    return `${scheme}${auth}${hostname}:5432${path}${search}`;
   } catch {
     return null;
   }

@@ -35,25 +35,20 @@ describe('isSupabasePoolerUrl', () => {
 });
 
 describe('deriveDirectUrl', () => {
-  test('swaps pooler hostname + port for known shape', () => {
+  test('uses the session-mode pooler endpoint for known shape', () => {
     const direct = deriveDirectUrl(
       'postgresql://postgres.abcxyz:secret@aws-0-us-east-1.pooler.supabase.com:6543/postgres'
     );
     expect(direct).toBeTruthy();
-    expect(direct).toContain('db.abcxyz.supabase.co:5432');
+    expect(direct).toContain('aws-0-us-east-1.pooler.supabase.com:5432');
     expect(direct).toContain(':secret@'); // creds preserved
   });
 
-  test('strips .<project-ref> suffix from username when going pooler→direct', () => {
-    // Supabase direct connections require bare `postgres`; the `postgres.<ref>`
-    // form is pooler-only (Supavisor uses the suffix for tenant routing).
-    // Without the strip, direct auth fails with "password authentication
-    // failed for user postgres.<ref>" even with the correct password.
+  test('preserves the pooler tenant suffix in session mode', () => {
     const direct = deriveDirectUrl(
       'postgresql://postgres.abcxyz:secret@aws-0-us-east-1.pooler.supabase.com:6543/postgres'
     );
-    expect(direct).toContain('postgres:secret@'); // bare username
-    expect(direct).not.toContain('postgres.abcxyz:secret@'); // no pooler suffix
+    expect(direct).toContain('postgres.abcxyz:secret@');
   });
 
   test('falls back to port-only swap when project-ref unparseable', () => {
@@ -62,7 +57,7 @@ describe('deriveDirectUrl', () => {
     );
     expect(direct).toBeTruthy();
     expect(direct).toContain(':5432');
-    expect(direct).toContain('some.pooler.supabase.com'); // host preserved
+    expect(direct).toContain('some.pooler.supabase.com:5432'); // host preserved
     expect(direct).toContain('customuser:secret@'); // non-pooler username preserved
   });
 
@@ -168,7 +163,7 @@ describe('ConnectionManager — describeMode + dual-pool routing', () => {
     expect(cm.isSupabase()).toBe(true);
     expect(cm.isDualPoolActive()).toBe(true);
     expect(cm.describeMode().mode).toBe('split');
-    expect(cm.describeMode().direct_host).toContain('db.abc.supabase.co:5432');
+    expect(cm.describeMode().direct_host).toContain('aws.pooler.supabase.com:5432');
   });
 
   test('kill-switch active → single mode (kill-switch)', () => {

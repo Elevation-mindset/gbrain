@@ -179,6 +179,17 @@ async function phaseBFenceFacts(
   }
 
   try {
+    // Do not reject a dirty source tree when there is no legacy work left.
+    // This migration is commonly retried after the schema phase has already
+    // completed, and a no-op retry must remain safe in an active checkout.
+    const pendingRows = await engine.executeRaw<{ n: string }>(
+      `SELECT COUNT(*) AS n FROM facts WHERE row_num IS NULL`,
+    );
+    const pendingCount = parseInt(pendingRows[0]?.n ?? '0', 10);
+    if (pendingCount === 0) {
+      return { name: 'fence_facts', status: 'complete', detail: 'no legacy facts pending' };
+    }
+
     // Look up all sources + their local_paths.
     const sources = await engine.executeRaw<SourceLookup>(
       `SELECT id, local_path FROM sources`,
