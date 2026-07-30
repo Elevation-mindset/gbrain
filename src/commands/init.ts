@@ -111,6 +111,33 @@ export async function runInit(args: string[]) {
 
   // Explicit PGLite mode
   if (isPGLite || (!isSupabase && !manualUrl && !isNonInteractive)) {
+    // Guard against the footgun documented at the top of this file: bare
+    // `gbrain init` (no --pglite/--supabase/--url) silently downgrades an
+    // existing `engine: postgres` brain to local PGLite. That downgrade is
+    // invisible — init still reports success — and on a machine whose
+    // Postgres credential projection is broken (not deliberately switched
+    // off), it silently orphans the shared brain onto an unbacked local file
+    // (2026-07-27 incident: wiki/ops/incidents/2026-07-27-gbrain-pglite-silent-fallback-corruption.md).
+    // Only the implicit/bare path is guarded — an explicit `--pglite` or
+    // `--force` remains a one-line, unambiguous opt-in.
+    if (!isPGLite && !isForce && existing?.engine === 'postgres') {
+      const msg =
+        'Refusing to silently switch this brain from Postgres to local PGLite.\n' +
+        `${configPath()} currently has "engine": "postgres", but this bare \`gbrain init\`\n` +
+        'has no --supabase/--url, so it would default to a new local PGLite brain instead —\n' +
+        'orphaning the existing Postgres data with no warning. This is almost always a\n' +
+        'missing/broken credential (GBRAIN_DATABASE_URL / the runtime credential\n' +
+        'projection), not an intentional switch to local-only.\n\n' +
+        '  gbrain doctor                  Diagnose the Postgres connection\n' +
+        '  gbrain init --pglite --force   Intentionally switch to local PGLite anyway\n';
+      if (jsonOutput) {
+        console.log(JSON.stringify({ status: 'error', reason: 'refusing_silent_pglite_downgrade', config_path: configPath(), message: msg }));
+      } else {
+        console.error(msg);
+      }
+      process.exit(1);
+    }
+
     // Smart detection: scan for .md files unless --pglite flag forces it
     if (!isPGLite && !isSupabase) {
       const fileCount = countMarkdownFiles(process.cwd());

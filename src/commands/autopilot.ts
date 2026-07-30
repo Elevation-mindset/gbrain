@@ -1135,6 +1135,13 @@ function writeWrapperScript(repoPath: string): string {
 # OPENAI/ANTHROPIC keys exported in zshenv reach autopilot.
 [ -f ~/.zshenv ] && source ~/.zshenv 2>/dev/null
 source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true
+# The line above silently no-ops on Linux/WSL whenever ~/.zshrc exists but
+# doesn't itself chain into ~/.bashrc — \`||\` short-circuits on ~/.zshrc's exit
+# code, not on whether it actually set anything, so ~/.bash_env (and secrets
+# like GBRAIN_DATABASE_URL) never reached this process. Source it directly,
+# unconditionally, as a guarantee independent of the zsh/bash branch above.
+# (2026-07-27 incident: wiki/ops/incidents/2026-07-27-gbrain-pglite-silent-fallback-corruption.md)
+[ -f ~/.bash_env ] && source ~/.bash_env 2>/dev/null
 exec '${safeGbrainPath}' autopilot --repo '${safeRepoPath}'
 `;
   writeFileSync(wrapperPath, wrapper, { mode: 0o755 });
